@@ -1,0 +1,41 @@
+name: Validate deployment config
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate workload manifests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out config repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: 'v4.3.2'
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install YAML parser
+        run: python -m pip install 'PyYAML==6.0.3'
+
+      - name: Lint Helm chart
+        run: helm lint ./apps/workload-api
+
+      - name: Render Kubernetes manifests
+        run: helm template workload-api ./apps/workload-api > rendered.yaml
+
+      - name: Check deployment policies
+        run: python scripts/check_deployment_policies.py rendered.yaml

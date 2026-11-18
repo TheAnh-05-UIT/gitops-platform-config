@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: workload-api
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/theanh-05-uit/gitops-platform-config.git
+    targetRevision: main
+    path: apps/workload-api
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: workloads
+  syncPolicy:
+    automated: {}
+    syncOptions:
+      - CreateNamespace=true

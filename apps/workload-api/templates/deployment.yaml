@@ -12,6 +12,10 @@ spec:
       labels:
         app.kubernetes.io/name: workload-api
     spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         runAsNonRoot: true
       containers:

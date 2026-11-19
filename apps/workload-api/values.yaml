@@ -5,7 +5,7 @@ image:
 replicaCount: 2
 
 nodeSelector:
-  idp.example.com/region: ap-southeast-1
+  idp.example.com/region: eu-west-1
 
 resources:
   requests:

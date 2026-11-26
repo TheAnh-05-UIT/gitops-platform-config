@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workload API promotion control",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["generation", "frozen", "request", "blocked_images"],
+  "properties": {
+    "generation": {"type": "integer", "minimum": 0},
+    "frozen": {"type": "boolean"},
+    "request": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/request"}]},
+    "blocked_images": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sha", "digest", "reason"],
+        "properties": {
+          "sha": {"$ref": "#/$defs/sha"},
+          "digest": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+          "reason": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "mode", "sha", "digest", "run_id", "run_attempt", "expected_tag", "decision", "replaces_blocks"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^workload-api-g[1-9][0-9]*$"},
+        "mode": {"enum": ["promote", "repromote"]},
+        "sha": {"$ref": "#/$defs/sha"},
+        "digest": {"$ref": "#/$defs/digest"},
+        "run_id": {"type": "integer", "minimum": 1},
+        "run_attempt": {"type": "integer", "minimum": 1},
+        "expected_tag": {"$ref": "#/$defs/sha"},
+        "decision": {"type": "string", "minLength": 1},
+        "replaces_blocks": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/sha"}}
+      }
+    }
+  }
+}

@@ -172,6 +172,18 @@ class TrustedPromotionTests(unittest.TestCase):
         with self.assertRaises(PolicyError):
             self.verify([self.review, self.review | {"state": "DISMISSED"}])
 
+    def test_promotion_guard_workflow_checks_out_only_trusted_base(self):
+        import yaml
+
+        workflow = yaml.load(Path(".github/workflows/trusted-promotion.yml").read_bytes(), Loader=yaml.BaseLoader)
+        self.assertEqual(set(workflow["on"]), {"pull_request_target"})
+        trusted = workflow["jobs"]["trusted-promotion"]
+        checkout = next(step for step in trusted["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertEqual(checkout["with"]["persist-credentials"], "false")
+        self.assertEqual(trusted["permissions"], {"contents": "read", "pull-requests": "read"})
+        self.assertEqual(trusted["environment"], "promotion-verification")
+
     def test_registry_verifies_raw_manifest_and_scanned_config_id(self):
         media_type = self.proof["receipt"]["media_type"]
         body = json.dumps({"mediaType": media_type, "config": {"digest": DIGEST}}).encode()

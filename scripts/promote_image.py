@@ -182,20 +182,46 @@ class GitHubReader:
             return json.loads(archive.read(entries[0]))
 
 
-def registry_digest(request):
+def registry_digest(request, *, media_type=None, image_id=None):
+    # Registry inspection may use Docker's credential store. Do not pass
+    # GitHub API credentials to the Docker CLI or its Buildx plugin.
+    env = os.environ.copy()
+    for key in ("CONFIG_READ_TOKEN", "WORKLOAD_READ_TOKEN", "PROMOTION_SOURCE_READ_TOKEN",
+                "PROMOTION_CONFIG_READ_TOKEN"):
+        env.pop(key, None)
+
     def descriptor(ref):
         try:
             result = subprocess.run(
                 ["docker", "buildx", "imagetools", "inspect", ref, "--format", "{{json .Manifest}}"],
-                capture_output=True, text=True, check=True, timeout=20,
+                capture_output=True, text=True, check=True, timeout=20, env=env,
             )
             return json.loads(result.stdout)["digest"]
         except (OSError, subprocess.SubprocessError, ValueError, KeyError):
             raise PolicyError("Registry descriptor could not be read") from None
 
-    digest = descriptor(f"{IMAGE_REPOSITORY}:{request.sha}")
+    tagged = f"{IMAGE_REPOSITORY}:{request.sha}"
+    pinned = f"{IMAGE_REPOSITORY}@{request.digest}"
+    if media_type is not None:
+        for ref in (tagged, pinned):
+            try:
+                result = subprocess.run(
+                    ["docker", "buildx", "imagetools", "inspect", ref, "--raw"],
+                    capture_output=True, check=True, timeout=20, env=env,
+                )
+                manifest = json.loads(result.stdout)
+                digest = "sha256:" + hashlib.sha256(result.stdout).hexdigest()
+                require(digest == request.digest and manifest["mediaType"] == media_type
+                        and manifest["config"]["digest"] == image_id,
+                        "Registry manifest bytes, media type or scanned image ID do not match")
+            except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
+                if isinstance(error, PolicyError):
+                    raise
+                raise PolicyError("Registry manifest could not be verified") from None
+        return request.digest
+    digest = descriptor(tagged)
     require(digest == request.digest, "Registry tag maps to an unexpected digest")
-    require(descriptor(f"{IMAGE_REPOSITORY}@{request.digest}") == digest, "Digest is not available by reference")
+    require(descriptor(pinned) == digest, "Digest is not available by reference")
     return digest
 
 

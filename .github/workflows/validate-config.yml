@@ -14,17 +14,25 @@ jobs:
 
     steps:
       - name: Check out config repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
+      - name: Check out trusted config base
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-policy
+          persist-credentials: false
+          sparse-checkout: scripts
+
       - name: Install Helm
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           version: 'v4.3.2'
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.12'
 
@@ -38,4 +46,4 @@ jobs:
         run: helm template workload-api ./apps/workload-api > rendered.yaml
 
       - name: Check deployment policies
-        run: python scripts/check_deployment_policies.py rendered.yaml
+        run: python trusted-policy/scripts/check_deployment_policies.py rendered.yaml

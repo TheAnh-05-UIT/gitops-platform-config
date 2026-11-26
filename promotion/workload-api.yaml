@@ -1,0 +1,7 @@
+generation: 0
+frozen: true
+request: null
+blocked_images:
+  - sha: "2dd86b7d8237da0ae37878ae99bc9cf983e3a9d0"
+    digest: null
+    reason: "Config PR #3 reverted PR #2 (8b5497e). Reason and historical digest unknown."

@@ -1,6 +1,15 @@
-generation: 0
-frozen: true
-request: null
+generation: 1
+frozen: false
+request:
+  id: workload-api-g1
+  mode: promote
+  sha: "5ebc4882e4c680dfd7166f073bc34c38c2332c41"
+  digest: "sha256:0f08ead5fc2e576fca63d88459c8c15bbbc36859a9b04920427168dbe32df3f0"
+  run_id: 46022213659
+  run_attempt: 1
+  expected_tag: "97172600d3b87dded805e942d6e247190a0827e1"
+  decision: "R3 hosted acceptance candidate for protected Workload run 46022213659 attempt 1."
+  replaces_blocks: []
 blocked_images:
   - sha: "2dd86b7d8237da0ae37878ae99bc9cf983e3a9d0"
     digest: null

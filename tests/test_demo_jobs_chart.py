@@ -40,3 +40,16 @@ class DemoJobsChart(unittest.TestCase):
             self.assertIn(role, container["args"])
             self.assertTrue(container["securityContext"]["readOnlyRootFilesystem"])
         self.assertEqual(docs["NetworkPolicy"]["spec"]["policyTypes"], ["Ingress", "Egress"])
+
+    def test_opt_in_application_is_scoped_and_manual(self):
+        path = ROOT / "argocd/examples/demo-jobs.yaml.example"
+        project, app = yaml.safe_load_all(path.read_text(encoding="utf-8"))
+        self.assertEqual(app["spec"]["project"], project["metadata"]["name"])
+        self.assertEqual([app["spec"]["destination"]], project["spec"]["destinations"])
+        self.assertEqual([app["spec"]["source"]["repoURL"]], project["spec"]["sourceRepos"])
+        self.assertEqual(app["spec"]["source"]["path"], "apps/demo-jobs")
+        self.assertFalse(app["spec"]["syncPolicy"]["automated"]["enabled"])
+        self.assertEqual(project["spec"]["clusterResourceWhitelist"], [])
+        self.assertEqual({item["kind"] for item in project["spec"]["namespaceResourceWhitelist"]},
+                         {"CronJob", "Deployment", "NetworkPolicy"})
+        self.assertFalse((ROOT / "argocd/applications/demo-jobs.yaml").exists())

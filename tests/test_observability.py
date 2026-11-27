@@ -52,6 +52,7 @@ class ObservabilityTest(unittest.TestCase):
         self.assertEqual(stack["prometheus"]["prometheusSpec"]["retentionSize"], "1GiB")
         config = stack["alertmanager"]["config"]
         self.assertEqual(config["receivers"], [{"name": config["route"]["receiver"]}])
+        self.assertEqual(config["route"]["routes"], [])
         _, rule = load("metrics/workload-monitoring.yaml")
         self.assertEqual(rule["metadata"]["labels"], {"release": "lab-observe"})
         alerts = rule["spec"]["groups"][0]["rules"]

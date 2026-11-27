@@ -192,7 +192,7 @@ def registry_digest(request, *, media_type=None, image_id=None):
     # GitHub API credentials to the Docker CLI or its Buildx plugin.
     env = os.environ.copy()
     for key in ("CONFIG_READ_TOKEN", "WORKLOAD_READ_TOKEN", "PROMOTION_SOURCE_READ_TOKEN",
-                "PROMOTION_CONFIG_READ_TOKEN"):
+                "PROMOTION_CONFIG_READ_TOKEN", "PROMOTION_CONFIG_APP_TOKEN"):
         env.pop(key, None)
 
     def descriptor(ref):

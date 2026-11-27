@@ -132,33 +132,74 @@ def read_state(value):
     return State(generation, frozen, req, tuple(blocks))
 
 
-def image_tag(text):
+@dataclass(frozen=True)
+class ImageIdentity:
+    tag: str
+    digest: str | None = None
+
+    @property
+    def reference(self):
+        suffix = f"@{self.digest}" if self.digest else f":{self.tag}"
+        return IMAGE_REPOSITORY + suffix
+
+
+def image_identity(text):
     values = load_yaml(text)
     require(isinstance(values, dict), "Invalid workload values")
     image = values.get("image")
-    fields(image, "repository tag", "image")
+    require(isinstance(image, dict) and image.keys() in ({"repository", "tag"}, {"repository", "tag", "digest"}),
+            "Invalid image fields")
     require(image["repository"] == IMAGE_REPOSITORY, "Unexpected image repository")
     require(is_sha(image["tag"]), "Image tag must be a full workload SHA")
-    return image["tag"]
+    require("digest" not in image or is_digest(image["digest"]), "Invalid image digest")
+    return ImageIdentity(image["tag"], image.get("digest"))
+
+
+def image_tag(text):
+    return image_identity(text).tag
 
 
 def patch_tag(values, new_tag):
-    current = image_tag(values)
-    require(is_sha(new_tag), "Invalid replacement image tag")
+    require(image_identity(values).digest is None, "Digest-pinned images must use a paired source SHA and digest")
+    return patch_image(values, ImageIdentity(new_tag))
+
+
+def patch_image(values, target):
+    current = image_identity(values)
+    require(is_sha(target.tag) and (target.digest is None or is_digest(target.digest)), "Invalid replacement image")
+    require(current.digest is None or target.digest is not None, "Cannot remove digest pinning")
     document = yaml.compose(values, Loader=UniqueLoader)
     image = next(v for k, v in document.value if k.value == "image")
-    tag = next(v for k, v in image.value if k.value == "tag")
-    start, end = tag.start_mark.index, tag.end_mark.index
-    quote = tag.style or ""
-    require(quote in ("", "'", '"') and values[start:end] == f"{quote}{current}{quote}", "Unsupported image tag layout")
-    updated = values[:start] + f"{quote}{new_tag}{quote}" + values[end:]
-    require(image_tag(updated) == new_tag, "Updated image tag did not parse as the intended SHA")
+    nodes = {key.value: (key, value) for key, value in image.value}
+    edits = []
+    for key, old, new in (("tag", current.tag, target.tag), ("digest", current.digest, target.digest)):
+        if key in nodes:
+            _, node = nodes[key]
+            start, end = node.start_mark.index, node.end_mark.index
+            quote = node.style or ""
+            require(quote in ("", "'", '"') and values[start:end] == f"{quote}{old}{quote}",
+                    "Unsupported image scalar layout")
+            edits.append((start, end, f"{quote}{new}{quote}"))
+    if current.digest is None and target.digest is not None:
+        key, node = nodes["tag"]
+        require(not image.flow_style and key.start_mark.line == node.end_mark.line, "Unsupported image mapping layout")
+        end = values.find("\n", node.end_mark.index)
+        indent = " " * key.start_mark.column
+        newline = "\r\n" if end > 0 and values[end - 1] == "\r" else "\n"
+        entry = f'{indent}digest: "{target.digest}"'
+        edits.append((end + 1, end + 1, entry + newline) if end >= 0
+                     else (len(values), len(values), newline + entry))
+    updated = values
+    for start, end, replacement in sorted(edits, reverse=True):
+        updated = updated[:start] + replacement + updated[end:]
+    require(image_identity(updated) == target, "Updated fields do not select the intended image")
     return updated
 
 
 def guard(base, proposed, old_values, new_values, paths, rollback_targets=frozenset(), *, head_ref=None):
-    old_tag, new_tag = image_tag(old_values), image_tag(new_values)
-    if base == proposed and old_tag == new_tag:
+    old_image, new_image = image_identity(old_values), image_identity(new_values)
+    old_tag, new_tag = old_image.tag, new_image.tag
+    if base == proposed and old_image == new_image:
         return "unchanged-image"
     if base != proposed:
         require(proposed.generation == base.generation + 1, "Control change must advance one generation")
@@ -168,7 +209,7 @@ def guard(base, proposed, old_values, new_values, paths, rollback_targets=frozen
             and (old.digest is None or old.digest == new.digest)
             for old, new in zip(base.blocks, retained)
         ), "Historical blocks cannot be removed or rewritten")
-        if old_tag == new_tag:
+        if old_image == new_image:
             require(paths == {CONTROL_PATH}, "Admission must change only the control file")
             if proposed.request:
                 require(proposed.request.expected_tag == old_tag, "Admission targets a stale image")
@@ -182,22 +223,32 @@ def guard(base, proposed, old_values, new_values, paths, rollback_targets=frozen
         require(tuple(block.sha for block in added) == (() if previous_block else (old_tag,)),
                 "Rollback must block the withdrawn image")
         blocked = next(b for b in proposed.blocks if b.sha == old_tag)
+        if old_image.digest:
+            require(blocked.digest == old_image.digest, "Rollback block omits the withdrawn pinned digest")
         if base.request and base.request.sha == old_tag:
             require(blocked.digest == base.request.digest, "Rollback block omits the known digest")
-        require(new_tag in rollback_targets, "Rollback requires a prior image from trusted config history")
-        require(not any(block.sha == new_tag for block in proposed.blocks), "Rollback target is blocked")
-        require(new_values == patch_tag(old_values, new_tag), "Rollback changes unrelated values")
+        require(new_image in rollback_targets or (new_image.digest is None and new_tag in rollback_targets),
+                "Rollback requires a prior image from trusted config history")
+        require(not any(block.sha == new_tag or (new_image.digest is not None and block.digest == new_image.digest)
+                        for block in proposed.blocks), "Rollback target is blocked")
+        require(new_values == patch_image(old_values, new_image), "Rollback changes unrelated values")
         return "rollback"
     require(paths == {VALUES_PATH}, "Promotion must change only the values file")
     request = base.request
     require(not base.frozen and request is not None, "No active trusted approval")
     require(head_ref == request.branch, "PR branch does not identify the current approved generation")
     require(old_tag == request.expected_tag and new_tag == request.sha, "Image does not match the trusted request")
-    require(new_values == patch_tag(old_values, request.sha), "Promotion changes unrelated values")
+    require(new_image.digest is None or new_image.digest == request.digest, "Pin differs from approved digest")
+    require(old_image.digest is not None or new_image.digest is None or old_tag == new_tag,
+            "First digest pin must keep the current source SHA")
+    require(old_tag != new_tag or old_image.digest in (None, new_image.digest),
+            "An existing pin for the source SHA cannot be rebound")
+    require(new_values == patch_image(old_values, new_image), "Promotion changes unrelated values")
     return "promotion"
 
 
-def validate_rendered(rendered: list[dict[str, Any]], tag: str):
+def validate_rendered(rendered: list[dict[str, Any]], image: str | ImageIdentity):
+    identity = ImageIdentity(image) if isinstance(image, str) else image
     images = [
         container.get("image")
         for document in rendered
@@ -205,4 +256,4 @@ def validate_rendered(rendered: list[dict[str, Any]], tag: str):
         for container in document["spec"]["template"]["spec"]["containers"]
         if container.get("name") == "workload-api"
     ]
-    require(images == [f"{IMAGE_REPOSITORY}:{tag}"], "Rendered workload image does not match guarded values")
+    require(images == [identity.reference], "Rendered workload image does not match guarded values")

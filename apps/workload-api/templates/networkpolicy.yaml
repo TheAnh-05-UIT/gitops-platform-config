@@ -1,0 +1,29 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: workload-api
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: workload-api
+  policyTypes: ["Ingress", "Egress"]
+  {{- if .Values.networkPolicy.allowedIngress }}
+  ingress:
+    - from:
+        {{- range .Values.networkPolicy.allowedIngress }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .namespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .podLabels | nindent 14 }}
+        {{- end }}
+      ports:
+        - port: 8080
+          protocol: TCP
+  {{- else }}
+  ingress: []
+  {{- end }}
+  egress: []
+{{- end }}

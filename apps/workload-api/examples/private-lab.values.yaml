@@ -1,0 +1,13 @@
+ingress:
+  enabled: true
+  className: traefik
+  host: workload.lab.example.internal
+  tlsSecretName: workload-api-lab-tls
+networkPolicy:
+  enabled: true
+  allowedIngress:
+    - namespace: kube-system
+      podLabels:
+        app.kubernetes.io/name: traefik
+namespaceBudget:
+  enabled: true

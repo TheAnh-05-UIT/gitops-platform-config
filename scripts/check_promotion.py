@@ -26,7 +26,8 @@ from .promote_image import GitHubReader, check_rejection_history, registry_diges
 
 PUBLISH_JOBS = {
     "Build and smoke": {"Build image", "Test HTTP endpoints", "Upload tested image"},
-    "Scan image": {"Verify image archive", "Scan image with Trivy"},
+    "Scan image": {"Verify image archive", "Scan image with Trivy", "Scan image secrets",
+                   "Generate SBOM from tested image", "Upload image SBOM"},
     "Publish image": {"Verify image archive", "Load the scanned image", "Publish image to GHCR",
                        "Upload verified publication receipt"},
 }

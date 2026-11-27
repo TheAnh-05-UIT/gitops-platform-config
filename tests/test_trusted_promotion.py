@@ -43,7 +43,8 @@ class TrustedPromotionTests(unittest.TestCase):
                       "steps": [{"name": step, "conclusion": "success"} for step in names]}
                      for name, names in (
                          ("Build and smoke", ["Build image", "Test HTTP endpoints", "Upload tested image"]),
-                         ("Scan image", ["Verify image archive", "Scan image with Trivy"]),
+                         ("Scan image", ["Verify image archive", "Scan image with Trivy", "Scan image secrets",
+                                         "Generate SBOM from tested image", "Upload image SBOM"]),
                          ("Publish image", ["Verify image archive", "Load the scanned image",
                                             "Publish image to GHCR", "Upload verified publication receipt"]),
                      )]
@@ -147,10 +148,17 @@ class TrustedPromotionTests(unittest.TestCase):
             with self.subTest(jobs=invalid), self.assertRaises(PolicyError):
                 self.verify()
 
-    def test_successful_job_cannot_hide_skipped_trivy_step(self):
-        self.jobs[1]["steps"][-1]["conclusion"] = "skipped"
-        with self.assertRaisesRegex(PolicyError, "step"):
-            self.verify()
+    def test_successful_job_cannot_hide_missing_or_skipped_scan_evidence(self):
+        steps = self.jobs[1]["steps"]
+        for name in ("Scan image with Trivy", "Scan image secrets",
+                     "Generate SBOM from tested image", "Upload image SBOM"):
+            for conclusion in (None, "skipped"):
+                self.jobs[1]["steps"] = [
+                    step if step["name"] != name else step | {"conclusion": conclusion}
+                    for step in steps if step["name"] != name or conclusion is not None
+                ]
+                with self.subTest(name=name, conclusion=conclusion), self.assertRaisesRegex(PolicyError, "step"):
+                    self.verify()
 
     def test_receipt_from_superseded_workflow_attempt_is_rejected(self):
         self.proof["run"]["run_attempt"] = 2

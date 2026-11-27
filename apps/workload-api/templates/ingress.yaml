@@ -1,0 +1,33 @@
+{{- if .Values.ingress.enabled }}
+{{- $host := required "ingress.host is required when ingress is enabled" .Values.ingress.host }}
+{{- if or (not (contains "." $host)) (regexMatch "^[0-9]+([.][0-9]+){3}$" $host) }}
+{{- fail "ingress.host must name a fully qualified DNS host" }}
+{{- end }}
+{{- if and .Values.networkPolicy.enabled (not .Values.networkPolicy.allowedIngress) }}
+{{- fail "ingress with NetworkPolicy requires a verified ingress-controller peer" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: workload-api
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: {{ required "ingress.className is required when ingress is enabled" .Values.ingress.className | quote }}
+  tls:
+    - hosts:
+        - {{ $host | quote }}
+      secretName: {{ required "ingress.tlsSecretName is required when ingress is enabled" .Values.ingress.tlsSecretName | quote }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Exact
+            backend:
+              service:
+                name: workload-api
+                port:
+                  name: http
+{{- end }}

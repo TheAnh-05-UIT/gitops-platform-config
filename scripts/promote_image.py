@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .promotion_policy import (
     CONFIG_REPOSITORY, CONTROL_PATH, IMAGE_REPOSITORY, SOURCE_REPOSITORY,
-    VALUES_PATH, WORKFLOW, PolicyError, image_tag, is_sha, load_yaml, patch_tag,
+    VALUES_PATH, WORKFLOW, ImageIdentity, PolicyError, image_identity, is_sha, load_yaml, patch_image,
     read_state, require,
 )
 
@@ -68,20 +68,25 @@ def selected_request(state, request_id):
     return request
 
 
-def plan(state, request_id, values, evidence, *, remote_state="absent"):
+def plan(state, request_id, values, evidence, *, remote_state="absent", pin_digest=False):
     request = selected_request(state, request_id)
     verify_evidence(request, evidence)
-    current = image_tag(values)
-    if current == request.sha:
+    current = image_identity(values)
+    target = ImageIdentity(request.sha, request.digest if pin_digest or current.digest else None)
+    if current == target:
         return Preview("no-op", request.branch, values)
-    require(current == request.expected_tag, "Current config image differs from approved base")
+    require(current.tag == request.expected_tag, "Current config image differs from approved base")
+    require(not pin_digest or current.digest is not None or target.tag == current.tag,
+            "First digest pin must keep the current source SHA")
+    require(current.tag != request.sha or current.digest in (None, request.digest),
+            "An existing pin for the source SHA cannot be rebound")
     actions = {
         "absent": "propose", "open": "reuse-pr", "branch": "recover-pr",
         "stale-open": "refresh-branch", "stale-branch": "refresh-and-recover",
     }
     require(isinstance(remote_state, str) and remote_state in actions,
             "Closed, conflicting or unverified promotion requires owner review")
-    return Preview(actions[remote_state], request.branch, patch_tag(values, request.sha))
+    return Preview(actions[remote_state], request.branch, patch_image(values, target))
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -187,7 +192,7 @@ def registry_digest(request, *, media_type=None, image_id=None):
     # GitHub API credentials to the Docker CLI or its Buildx plugin.
     env = os.environ.copy()
     for key in ("CONFIG_READ_TOKEN", "WORKLOAD_READ_TOKEN", "PROMOTION_SOURCE_READ_TOKEN",
-                "PROMOTION_CONFIG_READ_TOKEN"):
+                "PROMOTION_CONFIG_READ_TOKEN", "PROMOTION_CONFIG_APP_TOKEN"):
         env.pop(key, None)
 
     def descriptor(ref):
@@ -249,9 +254,15 @@ def inspect_remote(reader, base_sha, request, bot_login):
         return "foreign"
     base_values = reader.file(CONFIG_REPOSITORY, VALUES_PATH, parent)
     original = read_state(load_yaml(reader.file(CONFIG_REPOSITORY, CONTROL_PATH, parent)))
-    if original.request != request or image_tag(base_values) != request.expected_tag:
+    if original.request != request or image_identity(base_values).tag != request.expected_tag:
         return "foreign"
-    if reader.file(CONFIG_REPOSITORY, VALUES_PATH, head) != patch_tag(base_values, request.sha):
+    head_values = reader.file(CONFIG_REPOSITORY, VALUES_PATH, head)
+    previous = image_identity(base_values)
+    target = image_identity(head_values)
+    expected = ImageIdentity(request.sha, request.digest if previous.digest else None)
+    if (target != expected
+            or (previous.tag == target.tag and previous.digest not in (None, target.digest))
+            or head_values != patch_image(base_values, target)):
         return "foreign"
     if parent != base_sha:
         return "stale-open" if pull else "stale-branch"
@@ -311,19 +322,23 @@ def main():
     parser.add_argument("--mode", choices=("dry-run", "read-only"), default="dry-run")
     parser.add_argument("--request", required=True)
     parser.add_argument("--snapshot", type=Path, help="Offline JSON fixture, never hosted proof")
+    parser.add_argument("--pin-digest", action="store_true", help="Preview initial pinning from offline evidence")
     parser.add_argument("--bot-login", help="Verified bot login for read-only branch recovery checks")
     args = parser.parse_args()
     if args.mode == "dry-run" and args.snapshot is None:
         parser.error("offline dry-run requires --snapshot")
     if args.mode == "read-only" and args.snapshot is not None:
         parser.error("read-only mode uses GitHub reads, not --snapshot")
+    if args.mode != "dry-run" and args.pin_digest:
+        parser.error("initial digest pinning requires an offline fixture and separate review")
     if not re.fullmatch(r"workload-api-g[1-9][0-9]*", args.request):
         parser.error("invalid request ID")
     try:
         if args.snapshot:
             sample = json.loads(args.snapshot.read_bytes())
             preview = plan(read_state(sample["control"]), args.request, sample["values"],
-                           sample["evidence"], remote_state=sample.get("remote_state", "absent"))
+                           sample["evidence"], remote_state=sample.get("remote_state", "absent"),
+                           pin_digest=args.pin_digest)
         else:
             preview = github_preview(args.request, args.bot_login)
     except PolicyError as error:

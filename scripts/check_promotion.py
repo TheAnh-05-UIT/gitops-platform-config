@@ -19,13 +19,15 @@ import yaml
 
 from .promotion_policy import (
     CONFIG_REPOSITORY, CONTROL_PATH, IMAGE_REPOSITORY, SOURCE_REPOSITORY, VALUES_PATH,
-    PolicyError, guard, image_tag, is_sha, load_yaml, read_state, require, validate_rendered,
+    PolicyError, guard, image_identity, is_sha, load_yaml, read_state, require, validate_rendered,
 )
+from .check_deployment_policies import check_deployment
 from .promote_image import GitHubReader, check_rejection_history, registry_digest, verify_evidence
 
 PUBLISH_JOBS = {
     "Build and smoke": {"Build image", "Test HTTP endpoints", "Upload tested image"},
-    "Scan image": {"Verify image archive", "Scan image with Trivy"},
+    "Scan image": {"Verify image archive", "Scan image with Trivy", "Scan image secrets",
+                   "Generate SBOM from tested image", "Upload image SBOM"},
     "Publish image": {"Verify image archive", "Load the scanned image", "Publish image to GHCR",
                        "Upload verified publication receipt"},
 }
@@ -33,6 +35,8 @@ IMAGE_MANIFESTS = {
     "application/vnd.oci.image.manifest.v1+json",
     "application/vnd.docker.distribution.manifest.v2+json",
 }
+WORKLOAD_CHART = "apps/workload-api"
+WORKLOAD_APPLICATION = "argocd/applications/workload-api.yaml"
 
 def git(repository, *args):
     try:
@@ -53,11 +57,11 @@ def check_merge(repository, base, merge, head, head_ref, head_repository, render
     before = read_state(load_yaml(git(repository, "show", f"{base}:{CONTROL_PATH}")))
     after = read_state(load_yaml(git(repository, "show", f"{merge}:{CONTROL_PATH}")))
     rollback_targets = set()
-    if before != after and after.frozen and after.request is None and image_tag(old) != image_tag(new):
+    if before != after and after.frozen and after.request is None and image_identity(old) != image_identity(new):
         commits = git(repository, "log", "--first-parent", "--format=%H", base, "--", VALUES_PATH)
         for commit in commits.splitlines():
             try:
-                rollback_targets.add(image_tag(git(repository, "show", f"{commit}:{VALUES_PATH}")))
+                rollback_targets.add(image_identity(git(repository, "show", f"{commit}:{VALUES_PATH}")))
             except PolicyError:
                 continue
     operation = guard(before, after, old, new, paths, rollback_targets, head_ref=head_ref)
@@ -65,7 +69,7 @@ def check_merge(repository, base, merge, head, head_ref, head_repository, render
         require(head_repository.lower() == CONFIG_REPOSITORY, "Promotion branch must belong to the config repository")
     if rendered is not None:
         manifests = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
-        validate_rendered(manifests, image_tag(new))
+        validate_rendered(manifests, image_identity(new))
     return operation
 
 
@@ -84,6 +88,84 @@ def approval_marker(number, base, head, merge, intent, rendered_image):
     }
     encoded = json.dumps(binding, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return "promotion-approval-sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def surface_review_marker(number, base, head, merge, operation):
+    # These candidates can change the effective image without changing image values.
+    payload = [CONFIG_REPOSITORY, number, base, head, merge, operation]
+    return "config-surface-approval-sha256:" + hashlib.sha256(json.dumps(payload).encode("utf-8")).hexdigest()
+
+
+def touches_deployment_surface(repository, base, merge):
+    paths = git(repository, "diff", "--no-renames", "--name-only", "-z", base, merge).split("\0")
+    return any(path != VALUES_PATH and path.startswith(("apps/", "argocd/", "scripts/", ".github/workflows/", "promotion/"))
+               and not path.lower().endswith(".md") for path in paths)
+
+
+def verify_workload_surface(repository, merge, *, expected_tag=None):
+    """Read only regular Git blobs and render in an empty Helm environment."""
+    application = load_yaml(git(repository, "show", f"{merge}:{WORKLOAD_APPLICATION}"))
+    source = application["spec"]["source"]
+    require(source == {"repoURL": f"https://github.com/{CONFIG_REPOSITORY}.git", "path": WORKLOAD_CHART,
+                       "targetRevision": "main"} and not application["spec"].get("sources")
+            and application["spec"]["destination"] == {"namespace": "workloads", "server": "https://kubernetes.default.svc"},
+            "Workload Application source or effective Helm values changed")
+    entries = [row for row in git(repository, "ls-tree", "-r", "-z", merge, "--", WORKLOAD_CHART).split("\0") if row]
+    require(2 <= len(entries) <= 80, "Candidate chart file count is outside the verified range")
+    with tempfile.TemporaryDirectory() as isolated:
+        root = Path(isolated)
+        for entry in entries:
+            metadata, path = entry.split("\t", 1)
+            mode, kind, object_id = metadata.split()
+            parts = path.split("/")
+            require(mode == "100644" and kind == "blob" and is_sha(object_id)
+                    and parts[:2] == WORKLOAD_CHART.split("/")
+                    and all(re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", part) for part in parts),
+                    "Candidate chart contains an unsupported Git entry")
+            size = int(git(repository, "cat-file", "-s", object_id))
+            require(0 <= size <= 131072, "Candidate chart file is too large")
+            output = root.joinpath(*parts)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(git(repository, "cat-file", "blob", object_id), encoding="utf-8", newline="")
+        chart = root / WORKLOAD_CHART
+        require(not load_yaml((chart / "Chart.yaml").read_text(encoding="utf-8")).get("dependencies"),
+                "Candidate chart introduces Helm dependencies")
+        image = image_identity((root / VALUES_PATH).read_text(encoding="utf-8"))
+        require(expected_tag is None or image.tag == expected_tag, "Merge candidate selects a different image")
+        env = {key: os.environ[key] for key in ("PATH", "SystemRoot", "TMP", "TEMP") if key in os.environ}
+        env.update(HOME=isolated, USERPROFILE=isolated, KUBECONFIG=str(root / "absent-kubeconfig"),
+                   HELM_CACHE_HOME=isolated, HELM_CONFIG_HOME=isolated, HELM_DATA_HOME=isolated)
+        try:
+            result = subprocess.check_output(["helm", "template", "workload-api", str(chart), "-n", "workloads"],
+                                             cwd=root, env=env, timeout=30, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError):
+            raise PolicyError("Isolated candidate chart render failed") from None
+    manifests = [document for document in yaml.safe_load_all(result) if isinstance(document, dict)]
+    _verify_workload_manifests(manifests, image)
+    return image.reference
+
+
+def _verify_workload_manifests(manifests, image):
+    required = {("apps/v1", "Deployment", "workload-api"), ("v1", "Service", "workload-api")}
+    allowed = required | {
+        ("networking.k8s.io/v1", "Ingress", "workload-api"),
+        ("autoscaling/v2", "HorizontalPodAutoscaler", "workload-api"),
+        ("policy/v1", "PodDisruptionBudget", "workload-api"),
+        ("networking.k8s.io/v1", "NetworkPolicy", "workload-api"),
+        ("v1", "ResourceQuota", "workload-api-budget"),
+        ("v1", "LimitRange", "workload-api-budget"),
+    }
+    identities = {(obj.get("apiVersion"), obj.get("kind"), obj.get("metadata", {}).get("name"))
+                  for obj in manifests}
+    require(len(identities) == len(manifests) and required <= identities <= allowed
+            and all(obj.get("metadata", {}).get("namespace", "workloads") == "workloads" for obj in manifests),
+            "Candidate chart renders an unexpected object")
+    validate_rendered(manifests, image)
+    deployment = next(obj for obj in manifests if obj["kind"] == "Deployment")
+    pod = deployment["spec"]["template"]["spec"]
+    require(len(pod["containers"]) == 1 and not pod.get("initContainers") and not pod.get("ephemeralContainers"),
+            "Candidate chart renders an unexpected container")
+    require(not check_deployment(deployment), "Candidate Deployment fails the protected security policy")
 
 
 def current_candidate(config, number, trusted_base):
@@ -124,34 +206,9 @@ def fetch_candidate(repository, number, merge, token):
 
 
 def render_promotion(repository, merge, tag):
-    # check_merge limits promotion to the values file. Render the protected
-    # chart with exactly the candidate values, in a minimal environment.
-    values = git(repository, "show", f"{merge}:{VALUES_PATH}")
-    require(image_tag(values) == tag, "Merge candidate selects a different image")
-    mode = git(repository, "ls-tree", merge, VALUES_PATH).split()
-    require(mode and mode[0] == "100644", "Promotion values must be a regular tracked file")
-    with tempfile.TemporaryDirectory() as directory:
-        path = Path(directory) / "values.yaml"
-        path.write_text(values, encoding="utf-8", newline="")
-        env = {key: os.environ[key] for key in ("PATH", "SystemRoot", "TMP", "TEMP") if key in os.environ}
-        env.update(HELM_CACHE_HOME=directory, HELM_CONFIG_HOME=directory, HELM_DATA_HOME=directory)
-        try:
-            rendered = subprocess.check_output(
-                ["helm", "template", "workload-api", "./apps/workload-api", "-f", str(path)],
-                cwd=repository, env=env, stderr=subprocess.DEVNULL, timeout=30,
-            )
-        except (OSError, subprocess.SubprocessError):
-            raise PolicyError("Protected Helm render failed") from None
-    manifests = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
-    require(len(manifests) == 2 and {(doc.get("kind"), doc["metadata"]["name"]) for doc in manifests}
-            == {("Deployment", "workload-api"), ("Service", "workload-api")},
-            "Protected chart renders an unexpected resource")
-    deployment = next(doc for doc in manifests if doc["kind"] == "Deployment")
-    pod = deployment["spec"]["template"]["spec"]
-    require(len(pod["containers"]) == 1 and not pod.get("initContainers") and not pod.get("ephemeralContainers"),
-            "Protected chart renders an unexpected container")
-    validate_rendered(manifests, tag)
-    return f"{IMAGE_REPOSITORY}:{tag}"
+    # The merge guard already restricts promotion to values.yaml. Use the
+    # same immutable chart/render policy for promotion, rollback and review.
+    return verify_workload_surface(repository, merge, expected_tag=tag)
 
 
 def review_approved(config, number, head, marker, reviewer_ids, author_id):
@@ -231,6 +288,16 @@ def verify_pull(repository, config, source, number, trusted_base, reviewer_ids, 
         fetch(repository, number, merge)
     operation = check_merge(repository, *candidate)
     if operation != "promotion":
+        surface_change = touches_deployment_surface(repository, base, merge)
+        values_changed = git(repository, "show", f"{base}:{VALUES_PATH}") != git(repository, "show", f"{merge}:{VALUES_PATH}")
+        if operation == "rollback" or surface_change:
+            author = (pr.get("user") or {}).get("id")
+            marker = surface_review_marker(number, base, head, merge, operation)
+            require(type(author) is int and not pr.get("draft") and reviewer_ids
+                    and review_approved(config, number, head, marker, reviewer_ids, author),
+                    f"Independent approval of exact Config change required. Review body: {marker}")
+        if operation == "rollback" or surface_change or values_changed:
+            verify_workload_surface(repository, merge)
         require(current_candidate(config, number, trusted_base)[1] == candidate,
                 "PR candidate changed during verification")
         return operation, merge

@@ -1,0 +1,59 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: workload-api
+  namespace: observability
+  labels:
+    release: lab-observe
+spec:
+  jobLabel: app.kubernetes.io/name
+  namespaceSelector:
+    matchNames: [workloads]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: workload-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 5s
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          regex: 'workload_api_http_(requests_total|request_duration_seconds_(bucket|sum|count))'
+          action: keep
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: workload-api
+  namespace: observability
+  labels:
+    release: lab-observe
+spec:
+  groups:
+    - name: workload-api
+      rules:
+        - alert: WorkloadAPITargetUnavailable
+          expr: 'max(up{job="workload-api"}) == 0 or absent(up{job="workload-api"})'
+          for: 2m
+          labels:
+            severity: warning
+            owner: platform-operator
+          annotations:
+            summary: No healthy workload API metric targets for two minutes
+            runbook: observability/README.md#incident-exercise-and-recovery
+        - alert: WorkloadAPIHighServerErrorRate
+          expr: >
+            (
+              sum(rate(workload_api_http_requests_total{job="workload-api",route="index",status_class="5xx"}[5m]))
+              / sum(rate(workload_api_http_requests_total{job="workload-api",route="index"}[5m]))
+            ) > 0.01
+            and
+            sum(increase(workload_api_http_requests_total{job="workload-api",route="index"}[5m])) >= 20
+          for: 5m
+          labels:
+            severity: warning
+            owner: platform-operator
+          annotations:
+            summary: Workload API server errors exceed one percent of observed requests
+            runbook: observability/README.md#incident-exercise-and-recovery

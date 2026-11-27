@@ -14,3 +14,36 @@ resources:
   limits:
     cpu: 250m
     memory: 128Mi
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  tlsSecretName: ""
+
+networkPolicy:
+  enabled: false
+  allowedIngress: []
+
+namespaceBudget:
+  enabled: false
+  hard:
+    pods: "8"
+    requests.cpu: "1500m"
+    requests.memory: "1Gi"
+    limits.cpu: "3"
+    limits.memory: "2Gi"
+  containerMax:
+    cpu: "1"
+    memory: "512Mi"
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70
+
+disruptionBudget:
+  enabled: false
+  minAvailable: 1
+  eligibleNodes: 1

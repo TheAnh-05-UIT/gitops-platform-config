@@ -1,0 +1,19 @@
+{{- if .Values.namespaceBudget.enabled }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: workload-api-budget
+spec:
+  hard:
+    {{- toYaml .Values.namespaceBudget.hard | nindent 4 }}
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: workload-api-budget
+spec:
+  limits:
+    - type: Container
+      max:
+        {{- toYaml .Values.namespaceBudget.containerMax | nindent 8 }}
+{{- end }}

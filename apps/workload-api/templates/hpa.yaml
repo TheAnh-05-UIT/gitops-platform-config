@@ -1,0 +1,27 @@
+{{- if .Values.autoscaling.enabled }}
+{{- if gt (int .Values.autoscaling.minReplicas) (int .Values.autoscaling.maxReplicas) }}
+{{- fail "autoscaling.minReplicas must not exceed maxReplicas" }}
+{{- end }}
+{{- $request := dig "requests" "cpu" "" .Values.resources }}
+{{- if not (regexMatch "^[0-9]*[1-9][0-9]*m?$" (toString $request)) }}
+{{- fail "autoscaling requires a positive CPU request expressed in whole cores or millicores" }}
+{{- end }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: workload-api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: workload-api
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}

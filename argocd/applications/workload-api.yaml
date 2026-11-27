@@ -4,7 +4,7 @@ metadata:
   name: workload-api
   namespace: argocd
 spec:
-  project: default
+  project: workload-lab
   source:
     repoURL: https://github.com/theanh-05-uit/gitops-platform-config.git
     targetRevision: main
@@ -13,6 +13,5 @@ spec:
     server: https://kubernetes.default.svc
     namespace: workloads
   syncPolicy:
-    automated: {}
-    syncOptions:
-      - CreateNamespace=true
+    automated:
+      enabled: false

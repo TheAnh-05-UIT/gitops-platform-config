@@ -11,6 +11,13 @@ def check_deployment(deployment):
     containers = pod_spec["containers"] + (pod_spec.get("initContainers") or [])
     errors = []
 
+    if pod_spec.get("automountServiceAccountToken") is not False:
+        errors.append(f"Deployment/{name}: require automountServiceAccountToken: false.")
+
+    for field in ("hostNetwork", "hostPID", "hostIPC"):
+        if pod_spec.get(field):
+            errors.append(f"Deployment/{name}: forbid {field}.")
+
     for container in containers:
         location = f"Deployment/{name}, container/{container['name']}"
 
@@ -35,6 +42,20 @@ def check_deployment(deployment):
             errors.append(
                 f"{location}: require runAsNonRoot: true and forbid UID 0."
             )
+
+        seccomp = security.get("seccompProfile") or pod_security.get("seccompProfile") or {}
+        if seccomp.get("type") not in ("RuntimeDefault", "Localhost"):
+            errors.append(f"{location}: require RuntimeDefault or Localhost seccomp.")
+
+        if security.get("allowPrivilegeEscalation") is not False:
+            errors.append(f"{location}: require allowPrivilegeEscalation: false.")
+
+        if security.get("privileged"):
+            errors.append(f"{location}: forbid privileged mode.")
+
+        capabilities = security.get("capabilities") or {}
+        if "ALL" not in (capabilities.get("drop") or []) or capabilities.get("add"):
+            errors.append(f"{location}: drop ALL Linux capabilities and add none.")
 
         resources = container.get("resources") or {}
         for section in ("requests", "limits"):

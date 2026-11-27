@@ -1,0 +1,16 @@
+{{- if .Values.disruptionBudget.enabled }}
+{{- $replicaFloor := ternary .Values.autoscaling.minReplicas .Values.replicaCount .Values.autoscaling.enabled }}
+{{- $minimum := int .Values.disruptionBudget.minAvailable }}
+{{- if or (ge $minimum (int $replicaFloor)) (ge $minimum (int .Values.disruptionBudget.eligibleNodes)) }}
+{{- fail "disruptionBudget.minAvailable must be below both the replica floor and the verified eligible node count" }}
+{{- end }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: workload-api
+spec:
+  minAvailable: {{ .Values.disruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: workload-api
+{{- end }}

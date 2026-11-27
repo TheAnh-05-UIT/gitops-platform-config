@@ -1,0 +1,8 @@
+grafana:
+  additionalDataSources:
+    - name: Lab Loki
+      type: loki
+      uid: lab-loki
+      access: proxy
+      url: http://lab-loki.observability.svc:3100
+      editable: false

@@ -1,0 +1,79 @@
+{{- if .Values.enabled }}
+{{- if ne .Release.Namespace "workloads" }}
+{{- fail "demo-jobs must run in the approved workloads namespace" }}
+{{- end }}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" .Values.imageDigest) }}
+{{- fail "demo-jobs requires the independently verified image digest" }}
+{{- end }}
+{{- if not (regexMatch "^[a-z][a-z0-9-]{0,61}[a-z0-9]$" .Values.placementRegion) }}
+{{- fail "demo-jobs requires an approved placement region" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-probe-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: demo-probe-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: demo-probe-worker
+        idp.example.com/demo-probe: "true"
+    spec:
+      {{- include "demo-jobs.pod" (dict "values" .Values "role" "worker") | nindent 6 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: demo-availability-batch
+spec:
+  schedule: "*/15 * * * *"
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 60
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 45
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: demo-availability-batch
+            idp.example.com/demo-probe: "true"
+        spec:
+          restartPolicy: Never
+          {{- include "demo-jobs.pod" (dict "values" .Values "role" "batch") | nindent 10 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: demo-private-probes
+spec:
+  podSelector:
+    matchLabels:
+      idp.example.com/demo-probe: "true"
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {port: 53, protocol: UDP}
+        - {port: 53, protocol: TCP}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: workload-api
+      ports:
+        - {port: 8080, protocol: TCP}
+{{- end }}

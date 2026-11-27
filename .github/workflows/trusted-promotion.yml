@@ -38,6 +38,19 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           CONFIG_READ_TOKEN: ${{ github.token }}
           WORKLOAD_READ_TOKEN: ${{ secrets.PROMOTION_WORKLOAD_READ_TOKEN }}
+          REGISTRY_READ_USER: ${{ vars.PROMOTION_REGISTRY_READ_USER }}
+          REGISTRY_READ_TOKEN: ${{ secrets.PROMOTION_REGISTRY_READ_TOKEN }}
           PROMOTION_REVIEWER_IDS: ${{ vars.PROMOTION_REVIEWER_IDS }}
           PROMOTION_BOT_ID: ${{ vars.PROMOTION_BOT_ID }}
-        run: python -B -m scripts.check_promotion --trusted-pr --pr "$PR_NUMBER"
+        shell: bash
+        run: |
+          export DOCKER_CONFIG
+          DOCKER_CONFIG="$(mktemp -d)"
+          trap 'rm -rf -- "$DOCKER_CONFIG"' EXIT
+          if [[ -n "$REGISTRY_READ_USER" || -n "$REGISTRY_READ_TOKEN" ]]; then
+            [[ -n "$REGISTRY_READ_USER" && -n "$REGISTRY_READ_TOKEN" ]]
+            printf '%s' "$REGISTRY_READ_TOKEN" |
+              docker login ghcr.io --username "$REGISTRY_READ_USER" --password-stdin
+          fi
+          unset REGISTRY_READ_TOKEN REGISTRY_READ_USER
+          python -B -m scripts.check_promotion --trusted-pr --pr "$PR_NUMBER"

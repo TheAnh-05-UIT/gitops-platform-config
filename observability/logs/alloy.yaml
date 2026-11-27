@@ -1,0 +1,144 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lab-alloy
+  namespace: observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: lab-alloy-log-reader
+  namespace: workloads
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: lab-alloy-log-reader
+  namespace: workloads
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: lab-alloy-log-reader
+subjects:
+  - kind: ServiceAccount
+    name: lab-alloy
+    namespace: observability
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lab-alloy
+  namespace: observability
+data:
+  config.alloy: |
+    discovery.kubernetes "workload" {
+      role = "pod"
+      namespaces {
+        names = ["workloads"]
+      }
+      selectors {
+        role  = "pod"
+        label = "app.kubernetes.io/name=workload-api"
+      }
+    }
+
+    discovery.relabel "workload" {
+      targets = discovery.kubernetes.workload.targets
+      rule {
+        source_labels = ["__meta_kubernetes_pod_container_name"]
+        regex         = "workload-api"
+        action        = "keep"
+      }
+    }
+
+    loki.source.kubernetes "workload" {
+      targets    = discovery.relabel.workload.output
+      forward_to = [loki.process.safe_events.receiver]
+    }
+
+    loki.process "safe_events" {
+      forward_to = [loki.write.lab.receiver]
+      stage.static_labels {
+        values = { app = "workload-api" }
+      }
+      stage.match {
+        selector = `{app="workload-api"} !~ "workload_api_request route=(index|unmatched) status_class=([1-5]xx|other)$"`
+        action   = "drop"
+        drop_counter_reason = "unsupported_log_line"
+      }
+      stage.regex {
+        expression = "(?P<safe_event>workload_api_request route=(index|unmatched) status_class=([1-5]xx|other))$"
+      }
+      stage.output {
+        source = "safe_event"
+      }
+      stage.label_keep {
+        values = ["app"]
+      }
+    }
+
+    loki.write "lab" {
+      endpoint {
+        url = "http://lab-loki.observability.svc:3100/loki/api/v1/push"
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab-alloy
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lab-alloy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lab-alloy
+    spec:
+      serviceAccountName: lab-alloy
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alloy
+          image: grafana/alloy:v1.22.0
+          args:
+            - run
+            - --server.http.listen-addr=127.0.0.1:12345
+            - --storage.path=/var/lib/alloy
+            - /etc/alloy/config.alloy
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 30m, memory: 64Mi}
+            limits: {cpu: 150m, memory: 192Mi}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/alloy
+      volumes:
+        - name: config
+          configMap:
+            name: lab-alloy
+        - name: data
+          emptyDir:
+            sizeLimit: 128Mi

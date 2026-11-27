@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workload-api-dashboard
+  namespace: observability
+  labels:
+    grafana_dashboard: "1"
+data:
+  workload-api.json: |
+    {
+      "uid": "workload-api-red",
+      "title": "Workload API RED",
+      "schemaVersion": 39,
+      "time": {"from": "now-1h", "to": "now"},
+      "panels": [
+        {
+          "id": 1, "title": "Application requests per second", "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [{"refId": "A", "expr": "sum by (status_class) (rate(workload_api_http_requests_total{job=\"workload-api\",route=\"index\"}[5m]))"}]
+        },
+        {
+          "id": 2, "title": "P95 application latency", "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "targets": [{"refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(workload_api_http_request_duration_seconds_bucket{job=\"workload-api\",route=\"index\"}[5m])))"}]
+        },
+        {
+          "id": 3, "title": "Healthy scrape targets", "type": "timeseries",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [{"refId": "A", "expr": "sum(up{job=\"workload-api\"})"}]
+        }
+      ]
+    }

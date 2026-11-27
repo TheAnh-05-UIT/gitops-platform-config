@@ -1,0 +1,88 @@
+defaultRules:
+  create: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubeStateMetrics:
+  enabled: true
+nodeExporter:
+  enabled: true
+kube-state-metrics:
+  resources:
+    requests: {cpu: 20m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 192Mi}
+prometheus-node-exporter:
+  resources:
+    requests: {cpu: 15m, memory: 32Mi}
+    limits: {cpu: 100m, memory: 64Mi}
+prometheusOperator:
+  resources:
+    requests: {cpu: 30m, memory: 80Mi}
+    limits: {cpu: 250m, memory: 256Mi}
+prometheus:
+  ingress:
+    enabled: false
+  service:
+    type: ClusterIP
+  prometheusSpec:
+    replicas: 1
+    retention: 48h
+    retentionSize: 1GiB
+    ruleNamespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: observability
+    serviceMonitorNamespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: observability
+    scrapeInterval: 30s
+    podMetadata:
+      labels:
+        idp.example.com/metrics-collector: workload-observability
+    resources:
+      requests: {cpu: 150m, memory: 384Mi}
+      limits: {cpu: 750m, memory: 1Gi}
+alertmanager:
+  ingress:
+    enabled: false
+  service:
+    type: ClusterIP
+  config:
+    route:
+      receiver: lab-local
+      group_by: [alertname]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+    receivers:
+      - name: lab-local
+  alertmanagerSpec:
+    replicas: 1
+    resources:
+      requests: {cpu: 25m, memory: 64Mi}
+      limits: {cpu: 150m, memory: 128Mi}
+grafana:
+  defaultDashboardsEnabled: false
+  ingress:
+    enabled: false
+  service:
+    type: ClusterIP
+  admin:
+    existingSecret: lab-grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  podLabels:
+    idp.example.com/log-reader: workload-observability
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: observability
+    datasources:
+      uid: prometheus
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: 250m, memory: 384Mi}

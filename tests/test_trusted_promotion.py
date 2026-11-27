@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from scripts.check_promotion import approval_marker, fetch_candidate, render_promotion, verify_pull
+from scripts.check_promotion import WORKLOAD_APPLICATION, approval_marker, fetch_candidate, render_promotion, verify_pull
 from scripts.promote_image import registry_digest
 from scripts.promotion_policy import CONFIG_REPOSITORY, CONTROL_PATH, VALUES_PATH, PolicyError, patch_tag
 from test_promotion import BASE, BASE_SHA, BLOCK, DIGEST, NEXT, REVERTED_SHA, SOURCE, evidence, request
@@ -199,16 +199,30 @@ class TrustedPromotionTests(unittest.TestCase):
                 registry_digest(identity, media_type=media_type, image_id=DIGEST)
 
     def test_render_binds_git_values_and_rejects_extra_workloads(self):
-        def blob(_, *args):
-            return self.proposed if args[0] == "show" else f"100644 blob {HEAD}\t{VALUES_PATH}"
+        root = Path(".")
+        blobs = {path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+                 for path in (root / "apps/workload-api").rglob("*") if path.is_file()}
+        blobs[VALUES_PATH] = self.proposed
+        rows = {f"{index:040x}": item for index, item in enumerate(blobs.items(), 1)}
+
+        def blob(_, operation, *args):
+            if operation == "show":
+                self.assertEqual(args, (f"{MERGE}:{WORKLOAD_APPLICATION}",))
+                return (root / WORKLOAD_APPLICATION).read_text(encoding="utf-8")
+            if operation == "ls-tree":
+                return "\0".join(f"100644 blob {sha}\t{row[0]}" for sha, row in rows.items())
+            if operation == "cat-file":
+                content = rows[args[-1]][1]
+                return str(len(content.encode())) if args[0] == "-s" else content
+            self.fail(f"Unexpected Git operation {operation}")
 
         with patch("scripts.check_promotion.git", side_effect=blob):
-            self.assertEqual(render_promotion(Path("."), MERGE, NEXT), f"ghcr.io/{SOURCE}:{NEXT}")
+            self.assertEqual(render_promotion(root, MERGE, NEXT), f"ghcr.io/{SOURCE}:{NEXT}")
             with self.assertRaisesRegex(PolicyError, "different image"):
-                render_promotion(Path("."), MERGE, "f" * 40)
+                render_promotion(root, MERGE, "f" * 40)
             manifest = ("kind: Deployment\nmetadata: {name: workload-api}\n---\n"
                         "kind: Service\nmetadata: {name: workload-api}\n---\n"
                         "kind: Job\nmetadata: {name: other}\n")
             with patch("scripts.check_promotion.subprocess.check_output", return_value=manifest):
-                with self.assertRaisesRegex(PolicyError, "unexpected resource"):
-                    render_promotion(Path("."), MERGE, NEXT)
+                with self.assertRaisesRegex(PolicyError, "unexpected object"):
+                    render_promotion(root, MERGE, NEXT)

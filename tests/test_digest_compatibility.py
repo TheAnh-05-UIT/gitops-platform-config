@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import yaml
 
-from scripts.check_promotion import WORKLOAD_APPLICATION, verify_workload_surface
+from scripts.check_promotion import WORKLOAD_APPLICATION, render_promotion, verify_workload_surface
 
 from scripts.promotion_policy import (
     CONTROL_PATH, IMAGE_REPOSITORY, REVERTED_SHA, VALUES_PATH, ImageIdentity,
@@ -104,6 +104,7 @@ class DigestCompatibilityTests(unittest.TestCase):
 
         def read_object(repository, *args):
             if args[0] == "show":
+                assert args[-1].endswith(WORKLOAD_APPLICATION)
                 return (ROOT / WORKLOAD_APPLICATION).read_text(encoding="utf-8")
             if args[0] == "ls-tree":
                 return "\0".join(f"100644 blob {sha}\t{path}" for path, sha in sha_for_path.items())
@@ -112,6 +113,18 @@ class DigestCompatibilityTests(unittest.TestCase):
 
         with patch("scripts.check_promotion.git", side_effect=read_object):
             verify_workload_surface(ROOT, CURRENT)
+            values_id = sha_for_path[VALUES_PATH]
+            default = content[values_id]
+            for option in ("networkPolicy", "autoscaling", "namespaceBudget"):
+                with self.subTest(option=option):
+                    data = yaml.safe_load(default)
+                    data[option]["enabled"] = True
+                    content[values_id] = yaml.safe_dump(data)
+                    verify_workload_surface(ROOT, CURRENT)
+                    mock_with_tag = data["image"]["tag"]
+                    self.assertEqual(render_promotion(ROOT, CURRENT, mock_with_tag),
+                                     f"{IMAGE_REPOSITORY}:{mock_with_tag}")
+            content[values_id] = default
             sha = sha_for_path["apps/workload-api/templates/deployment.yaml"]
             original = content[sha]
             content[sha] = original.replace("{{ .Values.image.repository }}:{{ .Values.image.tag }}", "fixture/wrong:v1")

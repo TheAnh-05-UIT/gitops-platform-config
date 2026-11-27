@@ -82,9 +82,10 @@ class ObservabilityTest(unittest.TestCase):
         self.assertIn('names = ["workloads"]', alloy)
         self.assertIn('action   = "drop"', alloy)
         self.assertIn('source = "safe_event"', alloy)
-        pattern = re.search(r'expression = "([^"]+)"', alloy).group(1)
-        event = re.search(pattern, "prefixWithMetadata workload_api_request route=index status_class=2xx")
-        self.assertEqual(event.group("safe_event"), "workload_api_request route=index status_class=2xx")
+        pattern = json.loads(re.search(r'expression = ("[^"]+")', alloy).group(1))
+        for ending in ("", "\n", "\r\n"):
+            event = re.search(pattern, "prefixWithMetadata workload_api_request route=index status_class=2xx" + ending)
+            self.assertEqual(event.group("safe_event"), "workload_api_request route=index status_class=2xx")
         for line in (
             'request /private?token=example',
             'workload_api_request route=/personal-id status_class=2xx',

@@ -69,12 +69,12 @@ data:
         values = { app = "workload-api" }
       }
       stage.match {
-        selector = `{app="workload-api"} !~ "workload_api_request route=(index|unmatched) status_class=([1-5]xx|other)$"`
+        selector = `{app="workload-api"} !~ "workload_api_request route=(index|unmatched) status_class=([1-5]xx|other)[\\r\\n]*$"`
         action   = "drop"
         drop_counter_reason = "unsupported_log_line"
       }
       stage.regex {
-        expression = "(?P<safe_event>workload_api_request route=(index|unmatched) status_class=([1-5]xx|other))$"
+        expression = "(?P<safe_event>workload_api_request route=(index|unmatched) status_class=([1-5]xx|other))[\\r\\n]*$"
       }
       stage.output {
         source = "safe_event"

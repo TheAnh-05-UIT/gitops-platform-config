@@ -1,7 +1,7 @@
 image:
   repository: "ghcr.io/theanh-05-uit/gitops-platform-workload-api"
-  tag: "5ebc4882e4c680dfd7166f073bc34c38c2332c41"
-  digest: "sha256:0f08ead5fc2e576fca63d88459c8c15bbbc36859a9b04920427168dbe32df3f0"
+  tag: "842be34bb757981cc4dfd20f13f3adbb8dec03c6"
+  digest: "sha256:56cc800fea7bd2f8126db00595712e360eb6f404bc393f9decf366f551cd391e"
 
 replicaCount: 2
 

@@ -1,6 +1,17 @@
-generation: 4
-frozen: true
-request: null
+generation: 5
+frozen: false
+request:
+  id: workload-api-g5
+  mode: repromote
+  sha: 842be34bb757981cc4dfd20f13f3adbb8dec03c6
+  digest: sha256:56cc800fea7bd2f8126db00595712e360eb6f404bc393f9decf366f551cd391e
+  run_id: 46084662201
+  run_attempt: 1
+  expected_tag: 5ebc4882e4c680dfd7166f073bc34c38c2332c41
+  decision: R3 controlled repromotion after verified rollback. Requires fresh independent
+    review.
+  replaces_blocks:
+  - 842be34bb757981cc4dfd20f13f3adbb8dec03c6
 blocked_images:
 - sha: 2dd86b7d8237da0ae37878ae99bc9cf983e3a9d0
   digest: null

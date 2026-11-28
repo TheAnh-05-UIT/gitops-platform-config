@@ -53,12 +53,13 @@ class TrustedPromotionTests(unittest.TestCase):
             "body": approval_marker(10, BASE_SHA, HEAD, MERGE, self.intent, f"ghcr.io/{SOURCE}:{NEXT}"),
         }
 
-    def verify(self, reviews=None):
+    def verify(self, reviews=None, *, later_pull=None, later_source_tip=None):
         config, source = Mock(), Mock()
+        pulls = iter((self.pull, self.pull if later_pull is None else later_pull))
         def config_response(repo, path):
             self.assertEqual(repo, CONFIG_REPOSITORY)
             if path == "pulls/10":
-                return self.pull
+                return next(pulls)
             if path == "branches/main":
                 return {"protected": True, "commit": {"sha": BASE_SHA}}
             if path == "pulls/10/reviews?per_page=100&page=1":
@@ -68,7 +69,7 @@ class TrustedPromotionTests(unittest.TestCase):
             self.fail(f"Unexpected config API endpoint {path}")
 
         config.get.side_effect = config_response
-        source.head.return_value = self.proof["source_tip"]
+        source.head.return_value = self.proof["source_tip"] if later_source_tip is None else later_source_tip
         source.receipt.return_value = self.proof["receipt"]
         source.get.side_effect = lambda repo, path: {
             "branches/main": {"protected": True, "commit": {"sha": self.proof["source_tip"]}},
@@ -95,6 +96,18 @@ class TrustedPromotionTests(unittest.TestCase):
 
     def test_verified_candidate(self):
         self.assertEqual(self.verify(), ("promotion", MERGE))
+
+    def test_candidate_or_source_tip_changing_during_verification_is_rejected(self):
+        other = "f" * 40
+        changed_pull = self.pull | {
+            "head": self.pull["head"] | {"sha": other},
+            "merge_commit_sha": "1" * 40,
+        }
+        for changed in ({"later_pull": changed_pull}, {"later_source_tip": other}):
+            with self.subTest(changed=changed), self.assertRaisesRegex(
+                PolicyError, "Protected refs or PR candidate changed during verification"
+            ):
+                self.verify(**changed)
 
     def test_approval_for_other_head_base_or_merge_is_rejected(self):
         other = "f" * 40

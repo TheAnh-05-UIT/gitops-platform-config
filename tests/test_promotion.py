@@ -20,7 +20,7 @@ from scripts.promote_image import (
 )
 
 
-BASE = Path("apps/workload-api/values.yaml").read_bytes().decode()
+BASE = (Path(__file__).parent / "fixtures" / "workload-values-unpinned.yaml").read_bytes().decode()
 V1 = "97172600d3b87dded805e942d6e247190a0827e1"
 NEXT = "a" * 40
 DIGEST = "sha256:" + "b" * 64

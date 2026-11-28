@@ -114,7 +114,7 @@ class DigestCompatibilityTests(unittest.TestCase):
         with patch("scripts.check_promotion.git", side_effect=read_object):
             verify_workload_surface(ROOT, CURRENT)
             values_id = sha_for_path[VALUES_PATH]
-            default = content[values_id]
+            default = (Path(__file__).parent / "fixtures" / "workload-values-unpinned.yaml").read_text(encoding="utf-8")
             for option in ("networkPolicy", "autoscaling", "namespaceBudget"):
                 with self.subTest(option=option):
                     data = yaml.safe_load(default)

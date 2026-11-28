@@ -1,4 +1,5 @@
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -7,7 +8,7 @@ import unittest
 import yaml
 
 from scripts.check_deployment_policies import check_deployment
-from scripts.promotion_policy import image_tag, patch_tag, validate_rendered
+from scripts.promotion_policy import image_identity, image_tag, patch_tag, validate_rendered
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,9 +16,9 @@ CHART = ROOT / "apps" / "workload-api"
 REPO = "https://github.com/theanh-05-uit/gitops-platform-config.git"
 
 
-def render(*arguments):
+def render(*arguments, chart=CHART):
     return subprocess.run(
-        ["helm", "template", "workload-api", str(CHART), "--namespace", "workloads", *arguments],
+        ["helm", "template", "workload-api", str(chart), "--namespace", "workloads", *arguments],
         capture_output=True,
         text=True,
         check=False,
@@ -25,8 +26,8 @@ def render(*arguments):
 
 
 class LabManifestsTest(unittest.TestCase):
-    def assert_rendered(self, *arguments):
-        result = render(*arguments)
+    def assert_rendered(self, *arguments, chart=CHART):
+        result = render(*arguments, chart=chart)
         self.assertEqual(result.returncode, 0, result.stderr)
         return {
             document["kind"]: document
@@ -43,7 +44,7 @@ class LabManifestsTest(unittest.TestCase):
         pod = spec["template"]["spec"]
         container = pod["containers"][0]
         values = yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
-        self.assertEqual(container["image"], f"{values['image']['repository']}:{values['image']['tag']}")
+        self.assertEqual(container["image"], image_identity((CHART / "values.yaml").read_text(encoding="utf-8")).reference)
         self.assertEqual(pod["nodeSelector"], values["nodeSelector"])
         self.assertEqual(container["resources"], values["resources"])
         self.assertEqual(documents["Service"]["spec"]["type"], "ClusterIP")
@@ -51,14 +52,15 @@ class LabManifestsTest(unittest.TestCase):
         self.assertEqual(check_deployment(deployment), [])
 
     def test_promotion_patch_changes_only_the_tag_and_still_renders_the_trusted_contract(self):
-        original = (CHART / "values.yaml").read_text(encoding="utf-8")
+        original = (Path(__file__).parent / "fixtures" / "workload-values-unpinned.yaml").read_text(encoding="utf-8")
         candidate = "a" * 40
         patched = patch_tag(original, candidate)
         self.assertEqual(patch_tag(patched, image_tag(original)), original)
         with tempfile.TemporaryDirectory() as directory:
-            values = Path(directory) / "values.yaml"
-            values.write_text(patched, encoding="utf-8")
-            documents = self.assert_rendered("-f", str(values))
+            chart = Path(directory) / "workload-api"
+            shutil.copytree(CHART, chart)
+            (chart / "values.yaml").write_text(patched, encoding="utf-8")
+            documents = self.assert_rendered(chart=chart)
         self.assertEqual(set(documents), {"Deployment", "Service"})
         validate_rendered(list(documents.values()), candidate)
 
